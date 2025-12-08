@@ -11,7 +11,7 @@ interface TabsContextValue {
 const TabsContext = createContext<TabsContextValue | null>(null);
 
 interface TabsProps {
-  defaultValue: string;
+  defaultValue?: string;
   value?: string;
   onValueChange?: (value: string) => void;
   children: ReactNode;
@@ -19,8 +19,8 @@ interface TabsProps {
 }
 
 export function Tabs({ defaultValue, value, onValueChange, children, className }: TabsProps) {
-  const [internalValue, setInternalValue] = useState(defaultValue);
-  const activeTab = value ?? internalValue;
+  const [internalValue, setInternalValue] = useState(defaultValue || "");
+  const activeTab = value ?? internalValue ?? "";
 
   const setActiveTab = (tab: string) => {
     if (onValueChange) {
