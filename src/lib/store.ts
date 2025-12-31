@@ -66,8 +66,8 @@ const DEFAULT_PAYLOAD = JSON.stringify(
 export const useSimulatorStore = create<SimulatorState>()(
   persist(
     (set, get) => ({
-      // Network
-      network: "testnet",
+      // Network - default to mainnet since testnet is often unavailable
+      network: "mainnet",
       setNetwork: (network) => set({ network }),
 
       // Input state

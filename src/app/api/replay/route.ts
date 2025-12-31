@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Network configurations
-const NETWORKS = {
-  mainnet: "https://mainnet.movementnetwork.xyz/v1",
-  testnet: "https://testnet.movementnetwork.xyz/v1",
-  devnet: "https://devnet.movementnetwork.xyz/v1",
+// Network configurations with fallback RPCs
+const NETWORKS: Record<string, { primary: string; fallbacks: string[] }> = {
+  mainnet: {
+    primary: "https://mainnet.movementnetwork.xyz/v1",
+    fallbacks: [
+      "https://rpc.sentio.xyz/movement/v1",
+      "https://movement.blockpi.network/rpc/v1/public/v1",
+      "https://rpc.ankr.com/http/movement_mainnet/v1",
+    ],
+  },
+  testnet: {
+    primary: "https://testnet.movementnetwork.xyz/v1",
+    fallbacks: [],
+  },
+  devnet: {
+    primary: "https://devnet.movementnetwork.xyz/v1",
+    fallbacks: [],
+  },
 };
 
 type NetworkType = keyof typeof NETWORKS;
@@ -18,10 +31,44 @@ function generateMockSignature(): string {
   return "0x" + "0".repeat(128);
 }
 
+// Helper to fetch with fallback
+async function fetchWithFallback(
+  urls: string[],
+  path: string,
+  options?: RequestInit
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(`${url}${path}`, {
+        ...options,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok || (response.status >= 400 && response.status < 500)) {
+        return response;
+      }
+
+      lastError = new Error(`RPC error: ${response.status}`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      continue;
+    }
+  }
+
+  throw lastError || new Error("All RPC endpoints failed");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { hash, network = "testnet" } = body;
+    const { hash, network = "mainnet" } = body;
 
     if (!hash) {
       return NextResponse.json(
@@ -30,16 +77,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const networkUrl = NETWORKS[network as NetworkType];
-    if (!networkUrl) {
+    const networkConfig = NETWORKS[network as NetworkType];
+    if (!networkConfig) {
       return NextResponse.json(
         { error: `Invalid network: ${network}` },
         { status: 400 }
       );
     }
 
+    const urls = [networkConfig.primary, ...networkConfig.fallbacks];
+
     // First, fetch the original transaction
-    const txResponse = await fetch(`${networkUrl}/transactions/by_hash/${hash}`);
+    const txResponse = await fetchWithFallback(urls, `/transactions/by_hash/${hash}`);
 
     if (!txResponse.ok) {
       const errorText = await txResponse.text();
@@ -76,8 +125,9 @@ export async function POST(request: NextRequest) {
       },
     };
 
-    const simResponse = await fetch(
-      `${networkUrl}/transactions/simulate?estimate_gas_unit_price=true&estimate_max_gas_amount=true`,
+    const simResponse = await fetchWithFallback(
+      urls,
+      "/transactions/simulate?estimate_gas_unit_price=true&estimate_max_gas_amount=true",
       {
         method: "POST",
         headers: {

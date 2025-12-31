@@ -13,17 +13,22 @@ import {
   EntryFunctionPayload,
 } from "@/types";
 
-// Network configurations
-export const NETWORKS: Record<NetworkType, NetworkConfig> = {
+// Network configurations with multiple RPC endpoints for fallback
+export const NETWORKS: Record<NetworkType, NetworkConfig & { fallbackRpcs?: string[] }> = {
   mainnet: {
     name: "Movement Mainnet",
     fullnode: "https://mainnet.movementnetwork.xyz/v1",
-    indexer: "https://indexer.mainnet.movementnetwork.xyz/v1",
+    indexer: "https://indexer.mainnet.movementnetwork.xyz/v1/graphql",
+    fallbackRpcs: [
+      "https://rpc.sentio.xyz/movement/v1",
+      "https://movement.blockpi.network/rpc/v1/public/v1",
+      "https://rpc.ankr.com/http/movement_mainnet/v1",
+    ],
   },
   testnet: {
-    name: "Movement Testnet",
+    name: "Movement Testnet (Bardock)",
     fullnode: "https://testnet.movementnetwork.xyz/v1",
-    indexer: "https://indexer.testnet.movementnetwork.xyz/v1",
+    indexer: "https://hasura.testnet.movementnetwork.xyz/v1/graphql",
     faucet: "https://faucet.testnet.movementnetwork.xyz",
   },
   devnet: {
@@ -31,6 +36,30 @@ export const NETWORKS: Record<NetworkType, NetworkConfig> = {
     fullnode: "https://devnet.movementnetwork.xyz/v1",
   },
 };
+
+// Helper to get a working RPC URL with fallback support
+async function getWorkingRpcUrl(network: NetworkType): Promise<string> {
+  const config = NETWORKS[network];
+  const urls = [config.fullnode, ...(config.fallbackRpcs || [])];
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      });
+      if (response.ok) {
+        return url;
+      }
+    } catch {
+      // Try next URL
+      continue;
+    }
+  }
+
+  // Return primary if none work (will fail with proper error)
+  return config.fullnode;
+}
 
 // Get network config
 export function getNetworkConfig(network: NetworkType): NetworkConfig {
@@ -80,144 +109,238 @@ function buildSimulationBody(request: SimulationRequest): object {
   };
 }
 
-// Simulate a transaction
+// Simulate a transaction with fallback RPC support
 export async function simulateTransaction(
   request: SimulationRequest,
-  network: NetworkType = "testnet"
+  network: NetworkType = "mainnet"
 ): Promise<SimulationResult> {
-  const config = getNetworkConfig(network);
+  const config = NETWORKS[network];
+  const urls = [config.fullnode, ...(config.fallbackRpcs || [])];
   const body = buildSimulationBody(request);
 
-  try {
-    const response = await fetch(
-      `${config.fullnode}/transactions/simulate?estimate_gas_unit_price=true&estimate_max_gas_amount=true`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
+  let lastError: Error | null = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(
+        `${url}/transactions/simulate?estimate_gas_unit_price=true&estimate_max_gas_amount=true`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        // If it's a client error (4xx), don't try fallback - it's likely a bad request
+        if (response.status >= 400 && response.status < 500) {
+          throw new Error(`Simulation failed: ${errorText}`);
+        }
+        // Server error - try next endpoint
+        lastError = new Error(`RPC error (${response.status}): ${errorText}`);
+        continue;
       }
-    );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Simulation failed: ${errorText}`);
+      const data = await response.json();
+
+      // The API returns an array, take the first result
+      const result = Array.isArray(data) ? data[0] : data;
+
+      return {
+        success: result.success,
+        vm_status: result.vm_status,
+        gas_used: result.gas_used,
+        max_gas_amount: result.max_gas_amount,
+        gas_unit_price: result.gas_unit_price,
+        hash: result.hash,
+        version: result.version || "0",
+        sender: result.sender,
+        sequence_number: result.sequence_number,
+        expiration_timestamp_secs: result.expiration_timestamp_secs,
+        payload: result.payload,
+        changes: result.changes || [],
+        events: result.events || [],
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Simulation failed:")) {
+        throw error; // Re-throw client errors
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn(`RPC ${url} failed, trying next...`, lastError.message);
+      continue;
     }
-
-    const data = await response.json();
-
-    // The API returns an array, take the first result
-    const result = Array.isArray(data) ? data[0] : data;
-
-    return {
-      success: result.success,
-      vm_status: result.vm_status,
-      gas_used: result.gas_used,
-      max_gas_amount: result.max_gas_amount,
-      gas_unit_price: result.gas_unit_price,
-      hash: result.hash,
-      version: result.version || "0",
-      sender: result.sender,
-      sequence_number: result.sequence_number,
-      expiration_timestamp_secs: result.expiration_timestamp_secs,
-      payload: result.payload,
-      changes: result.changes || [],
-      events: result.events || [],
-    };
-  } catch (error) {
-    console.error("Simulation error:", error);
-    throw error;
   }
+
+  throw lastError || new Error(`All RPC endpoints failed for ${network}`);
 }
 
-// Get transaction by hash
+// Get transaction by hash with fallback RPC support
 export async function getTransactionByHash(
   hash: string,
-  network: NetworkType = "testnet"
+  network: NetworkType = "mainnet"
 ): Promise<TransactionInfo> {
-  const config = getNetworkConfig(network);
+  const config = NETWORKS[network];
+  const urls = [config.fullnode, ...(config.fallbackRpcs || [])];
 
-  const response = await fetch(`${config.fullnode}/transactions/by_hash/${hash}`);
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to fetch transaction: ${errorText}`);
+  for (const url of urls) {
+    try {
+      const response = await fetch(`${url}/transactions/by_hash/${hash}`, {
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status >= 400 && response.status < 500) {
+          throw new Error(`Failed to fetch transaction: ${errorText}`);
+        }
+        lastError = new Error(`RPC error (${response.status}): ${errorText}`);
+        continue;
+      }
+
+      const data = await response.json();
+
+      return {
+        version: data.version,
+        hash: data.hash,
+        success: data.success,
+        vm_status: data.vm_status,
+        sender: data.sender,
+        gas_used: data.gas_used,
+        gas_unit_price: data.gas_unit_price,
+        timestamp: data.timestamp,
+        payload: data.payload,
+        changes: data.changes || [],
+        events: data.events || [],
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Failed to fetch transaction:")) {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+      continue;
+    }
   }
 
-  const data = await response.json();
-
-  return {
-    version: data.version,
-    hash: data.hash,
-    success: data.success,
-    vm_status: data.vm_status,
-    sender: data.sender,
-    gas_used: data.gas_used,
-    gas_unit_price: data.gas_unit_price,
-    timestamp: data.timestamp,
-    payload: data.payload,
-    changes: data.changes || [],
-    events: data.events || [],
-  };
+  throw lastError || new Error(`All RPC endpoints failed for ${network}`);
 }
 
-// Get account resources
+// Get account resources with fallback RPC support
 export async function getAccountResources(
   address: string,
-  network: NetworkType = "testnet"
+  network: NetworkType = "mainnet"
 ): Promise<Record<string, unknown>[]> {
-  const config = getNetworkConfig(network);
+  const config = NETWORKS[network];
+  const urls = [config.fullnode, ...(config.fallbackRpcs || [])];
 
-  const response = await fetch(
-    `${config.fullnode}/accounts/${formatAddress(address)}/resources`
-  );
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch resources: ${await response.text()}`);
+  for (const url of urls) {
+    try {
+      const response = await fetch(
+        `${url}/accounts/${formatAddress(address)}/resources`,
+        { signal: AbortSignal.timeout(10000) }
+      );
+
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500) {
+          throw new Error(`Failed to fetch resources: ${await response.text()}`);
+        }
+        lastError = new Error(`RPC error: ${response.status}`);
+        continue;
+      }
+
+      return response.json();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Failed to fetch resources:")) {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+      continue;
+    }
   }
 
-  return response.json();
+  throw lastError || new Error(`All RPC endpoints failed for ${network}`);
 }
 
-// Get account module ABI
+// Get account module ABI with fallback RPC support
 export async function getModuleABI(
   address: string,
   moduleName: string,
-  network: NetworkType = "testnet"
+  network: NetworkType = "mainnet"
 ): Promise<ModuleABI> {
-  const config = getNetworkConfig(network);
+  const config = NETWORKS[network];
+  const urls = [config.fullnode, ...(config.fallbackRpcs || [])];
 
-  const response = await fetch(
-    `${config.fullnode}/accounts/${formatAddress(address)}/module/${moduleName}`
-  );
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch module: ${await response.text()}`);
+  for (const url of urls) {
+    try {
+      const response = await fetch(
+        `${url}/accounts/${formatAddress(address)}/module/${moduleName}`,
+        { signal: AbortSignal.timeout(10000) }
+      );
+
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500) {
+          throw new Error(`Failed to fetch module: ${await response.text()}`);
+        }
+        lastError = new Error(`RPC error: ${response.status}`);
+        continue;
+      }
+
+      const data = await response.json();
+      return data.abi;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Failed to fetch module:")) {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+      continue;
+    }
   }
 
-  const data = await response.json();
-  return data.abi;
+  throw lastError || new Error(`All RPC endpoints failed for ${network}`);
 }
 
-// Get account sequence number
+// Get account sequence number with fallback RPC support
 export async function getAccountSequenceNumber(
   address: string,
-  network: NetworkType = "testnet"
+  network: NetworkType = "mainnet"
 ): Promise<string> {
-  const config = getNetworkConfig(network);
+  const config = NETWORKS[network];
+  const urls = [config.fullnode, ...(config.fallbackRpcs || [])];
 
-  const response = await fetch(
-    `${config.fullnode}/accounts/${formatAddress(address)}`
-  );
+  for (const url of urls) {
+    try {
+      const response = await fetch(
+        `${url}/accounts/${formatAddress(address)}`,
+        { signal: AbortSignal.timeout(10000) }
+      );
 
-  if (!response.ok) {
-    // Account might not exist, return 0
-    return "0";
+      if (!response.ok) {
+        if (response.status === 404) {
+          // Account doesn't exist, return 0
+          return "0";
+        }
+        // Try next endpoint on server errors
+        continue;
+      }
+
+      const data = await response.json();
+      return data.sequence_number;
+    } catch {
+      continue;
+    }
   }
 
-  const data = await response.json();
-  return data.sequence_number;
+  // If all endpoints fail, return 0 as default
+  return "0";
 }
 
 // Parse function identifier
