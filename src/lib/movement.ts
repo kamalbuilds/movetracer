@@ -123,7 +123,7 @@ export async function simulateTransaction(
   for (const url of urls) {
     try {
       const response = await fetch(
-        `${url}/transactions/simulate?estimate_gas_unit_price=true&estimate_max_gas_amount=true`,
+        `${url}/transactions/simulate`,
         {
           method: "POST",
           headers: {

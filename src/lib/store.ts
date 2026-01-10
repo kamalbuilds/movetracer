@@ -120,7 +120,7 @@ export const useSimulatorStore = create<SimulatorState>()(
       },
     }),
     {
-      name: "movesim-storage",
+      name: "movetracer-storage",
       partialize: (state) => ({
         network: state.network,
         jsonPayload: state.jsonPayload,
