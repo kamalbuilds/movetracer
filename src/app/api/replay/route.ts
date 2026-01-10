@@ -127,7 +127,7 @@ export async function POST(request: NextRequest) {
 
     const simResponse = await fetchWithFallback(
       urls,
-      "/transactions/simulate?estimate_gas_unit_price=true&estimate_max_gas_amount=true",
+      "/transactions/simulate",
       {
         method: "POST",
         headers: {
