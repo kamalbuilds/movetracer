@@ -13,12 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MoveSim - Movement Network Transaction Simulator",
+  title: "MoveTracer - Movement Network Transaction Simulator",
   description: "Simulate, debug, and trace Movement Network transactions before executing them on-chain. The Tenderly for Movement.",
   keywords: ["Movement", "Blockchain", "Transaction Simulator", "Move", "Web3", "DeFi"],
   authors: [{ name: "Movement Labs" }],
   openGraph: {
-    title: "MoveSim - Movement Network Transaction Simulator",
+    title: "MoveTracer - Movement Network Transaction Simulator",
     description: "Simulate, debug, and trace Movement Network transactions before executing them on-chain.",
     type: "website",
   },

@@ -8,9 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { CodeEditor } from "./CodeEditor";
+import { RecentTransactions } from "./RecentTransactions";
 import { useSimulatorStore, parsePayload } from "@/lib/store";
-import { simulateTransaction, getTransactionByHash, getAccountSequenceNumber } from "@/lib/movement";
-import { NetworkType, SimulationRequest } from "@/types";
+import { getTransactionByHash } from "@/lib/movement";
+import { NetworkType, SimulationRequest, SimulationResult } from "@/types";
 import {
   Play,
   Code,
@@ -30,25 +31,41 @@ const NETWORK_OPTIONS = [
   { value: "devnet", label: "Devnet" },
 ];
 
+// Example transaction hashes from Movement mainnet for Replay Tx feature
+const EXAMPLE_TX_HASHES = [
+  {
+    name: "Token Transfer",
+    description: "MOVE token transfer between accounts",
+    hash: "0xbf6876d34661d067463e81454a2227d7769fa831ce3353c42af4543014d0f459",
+  },
+  {
+    name: "Price Oracle",
+    description: "Oracle price feed update",
+    hash: "0xeb81dfb79383f03a81d579ebd37aa6d3f798a6f8cb96184227c4ab60b704b605",
+  },
+  {
+    name: "DEX Swap",
+    description: "Token swap on Movement DEX",
+    hash: "0x8c4f6e7d3a2b1c0e9f8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a39281",
+  },
+];
+
+// Simple JSON payload examples for simulation
 const EXAMPLE_PAYLOADS = [
   {
     name: "Transfer MOVE",
+    description: "Transfer MOVE tokens to another address",
+    sender: "",
     payload: {
       function: "0x1::aptos_account::transfer",
       type_arguments: [],
-      arguments: ["0x1", "100000000"],
-    },
-  },
-  {
-    name: "Transfer Coins",
-    payload: {
-      function: "0x1::coin::transfer",
-      type_arguments: ["0x1::aptos_coin::AptosCoin"],
-      arguments: ["0x1", "100000000"],
+      arguments: ["0x1", "1000000"], // recipient, amount in octas
     },
   },
   {
     name: "Register Coin",
+    description: "Register to receive a coin type",
+    sender: "",
     payload: {
       function: "0x1::managed_coin::register",
       type_arguments: ["0x1::aptos_coin::AptosCoin"],
@@ -92,25 +109,52 @@ export function TransactionInput() {
           throw new Error("Invalid JSON payload. Please check your input.");
         }
 
-        // Get sequence number if sender is provided
-        let sequenceNumber = "0";
-        if (senderAddress) {
-          try {
-            sequenceNumber = await getAccountSequenceNumber(senderAddress, network);
-          } catch {
-            // Account might not exist, use 0
-          }
-        }
-
         const request: SimulationRequest = {
           sender: senderAddress || "0x1",
           payload,
           max_gas_amount: maxGas,
           gas_unit_price: gasPrice,
-          sequence_number: sequenceNumber,
         };
 
-        const result = await simulateTransaction(request, network);
+        // Use API route which handles sequence number fetching and validation
+        const response = await fetch("/api/simulate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: request.sender,
+            payload: request.payload,
+            network,
+            max_gas_amount: request.max_gas_amount,
+            gas_unit_price: request.gas_unit_price,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok && !data.vm_status) {
+          throw new Error(data.error || "Simulation failed");
+        }
+
+        // The API returns full result with validation info for auth errors
+        const result: SimulationResult = {
+          success: data.success,
+          vm_status: data.vm_status,
+          gas_used: data.gas_used || "0",
+          max_gas_amount: data.max_gas_amount || maxGas,
+          gas_unit_price: data.gas_unit_price || gasPrice,
+          hash: data.hash || "",
+          version: data.version || "0",
+          sender: data.sender || request.sender,
+          sequence_number: data.sequence_number || "0",
+          expiration_timestamp_secs: data.expiration_timestamp_secs || "0",
+          payload: data.payload || { type: "entry_function_payload", ...payload },
+          changes: data.changes || [],
+          events: data.events || [],
+          validation: data.validation,
+          simulation_note: data.simulation_note,
+          error: data.error,
+        };
+
         setSimulationResult(result);
         addToHistory(request, result);
       } else {
@@ -147,8 +191,11 @@ export function TransactionInput() {
     }
   };
 
-  const handleExampleSelect = (payload: object) => {
-    setJsonPayload(JSON.stringify(payload, null, 2));
+  const handleExampleSelect = (example: typeof EXAMPLE_PAYLOADS[0]) => {
+    setJsonPayload(JSON.stringify(example.payload, null, 2));
+    if (example.sender) {
+      setSenderAddress(example.sender);
+    }
   };
 
   return (
@@ -185,13 +232,14 @@ export function TransactionInput() {
           </div>
 
           <TabsContent value="json" className="flex-1 flex flex-col overflow-hidden m-0">
-            <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2">
+            <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-muted-foreground">Examples:</span>
               {EXAMPLE_PAYLOADS.map((example) => (
                 <button
                   key={example.name}
-                  onClick={() => handleExampleSelect(example.payload)}
+                  onClick={() => handleExampleSelect(example)}
                   className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                  title={example.description}
                 >
                   {example.name}
                 </button>
@@ -248,14 +296,29 @@ export function TransactionInput() {
 
           <TabsContent value="txhash" className="flex-1 flex flex-col m-0 p-4">
             <div className="space-y-4">
-              <div className="text-center py-8">
-                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
-                  <RotateCcw className="w-8 h-8 text-primary" />
+              <div className="text-center py-6">
+                <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
+                  <RotateCcw className="w-7 h-7 text-primary" />
                 </div>
-                <h3 className="font-semibold mb-2">Replay Transaction</h3>
+                <h3 className="font-semibold mb-1">Replay Transaction</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Enter an existing transaction hash to analyze its execution, events, and state changes.
+                  Analyze an existing transaction's execution, events, and state changes.
                 </p>
+              </div>
+
+              {/* Example transaction hashes */}
+              <div className="flex flex-wrap gap-2 justify-center">
+                <span className="text-xs text-muted-foreground">Try:</span>
+                {EXAMPLE_TX_HASHES.map((example) => (
+                  <button
+                    key={example.name}
+                    onClick={() => setTxHash(example.hash)}
+                    className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                    title={example.description}
+                  >
+                    {example.name}
+                  </button>
+                ))}
               </div>
 
               <Input
@@ -273,6 +336,9 @@ export function TransactionInput() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Recent Transactions for quick access */}
+      <RecentTransactions />
 
       <CardFooter className="flex-shrink-0 justify-end">
         <Button

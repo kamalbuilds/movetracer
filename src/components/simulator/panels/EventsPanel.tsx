@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { SimulationResult, TransactionEvent } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -9,6 +9,8 @@ import {
   Activity,
   Copy,
   Check,
+  Search,
+  Filter,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -18,6 +20,8 @@ interface EventsPanelProps {
 
 export function EventsPanel({ result }: EventsPanelProps) {
   const { events } = result;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedType, setSelectedType] = useState<string>("all");
 
   if (events.length === 0) {
     return (
@@ -28,44 +32,130 @@ export function EventsPanel({ result }: EventsPanelProps) {
   }
 
   // Group events by type
-  const eventsByType = events.reduce((acc, event) => {
-    const type = event.type;
-    if (!acc[type]) {
-      acc[type] = [];
-    }
-    acc[type].push(event);
-    return acc;
-  }, {} as Record<string, TransactionEvent[]>);
+  const eventsByType = useMemo(() => {
+    return events.reduce((acc, event) => {
+      const type = event.type;
+      if (!acc[type]) {
+        acc[type] = [];
+      }
+      acc[type].push(event);
+      return acc;
+    }, {} as Record<string, TransactionEvent[]>);
+  }, [events]);
+
+  // Get unique event types for filter dropdown
+  const eventTypes = useMemo(() => {
+    return Object.keys(eventsByType).map(type => ({
+      value: type,
+      label: type.split("::").pop() || type,
+      count: eventsByType[type].length
+    }));
+  }, [eventsByType]);
+
+  // Filter events based on search and type
+  const filteredEvents = useMemo(() => {
+    return events.filter(event => {
+      // Type filter
+      if (selectedType !== "all" && event.type !== selectedType) {
+        return false;
+      }
+      // Search filter
+      if (searchQuery) {
+        const searchLower = searchQuery.toLowerCase();
+        const eventName = event.type.toLowerCase();
+        const dataStr = JSON.stringify(event.data).toLowerCase();
+        return eventName.includes(searchLower) || dataStr.includes(searchLower);
+      }
+      return true;
+    });
+  }, [events, selectedType, searchQuery]);
 
   return (
     <div className="p-6 space-y-6">
-      <div className="mb-4">
-        <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-          Events Emitted
-        </h4>
-        <p className="text-xs text-muted-foreground">
-          {events.length} event{events.length !== 1 ? "s" : ""} emitted during execution
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+            Events Emitted
+          </h4>
+          <p className="text-xs text-muted-foreground">
+            {filteredEvents.length} of {events.length} event{events.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-3">
+          {/* Type filter dropdown */}
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <select
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value)}
+              className="pl-9 pr-8 py-2 text-sm bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 appearance-none cursor-pointer"
+            >
+              <option value="all">All Events ({events.length})</option>
+              {eventTypes.map(({ value, label, count }) => (
+                <option key={value} value={value}>
+                  {label} ({count})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search events..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-4 py-2 text-sm bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 w-48"
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Event type summary */}
+      {/* Event type summary - clickable badges */}
       <div className="flex flex-wrap gap-2">
-        {Object.entries(eventsByType).map(([type, items]) => {
-          const eventName = type.split("::").pop() || type;
-          return (
-            <Badge key={type} variant="info" className="gap-1">
-              <Activity className="w-3 h-3" />
-              {eventName}: {items.length}
-            </Badge>
-          );
-        })}
+        <button
+          onClick={() => setSelectedType("all")}
+          className={clsx(
+            "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
+            selectedType === "all"
+              ? "bg-primary text-primary-foreground"
+              : "bg-white/5 text-muted-foreground hover:bg-white/10"
+          )}
+        >
+          All ({events.length})
+        </button>
+        {eventTypes.map(({ value, label, count }) => (
+          <button
+            key={value}
+            onClick={() => setSelectedType(value)}
+            className={clsx(
+              "px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-1",
+              selectedType === value
+                ? "bg-blue-500 text-white"
+                : "bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+            )}
+          >
+            <Activity className="w-3 h-3" />
+            {label} ({count})
+          </button>
+        ))}
       </div>
 
       {/* Event list */}
       <div className="space-y-3">
-        {events.map((event, i) => (
-          <EventItem key={i} event={event} index={i} />
-        ))}
+        {filteredEvents.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            No events match your filter
+          </div>
+        ) : (
+          filteredEvents.map((event, i) => (
+            <EventItem key={`${event.type}-${i}`} event={event} index={i} />
+          ))
+        )}
       </div>
     </div>
   );

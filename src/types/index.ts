@@ -16,6 +16,15 @@ export interface TransactionPayload {
   };
 }
 
+// Validation info for auth errors
+export interface ValidationInfo {
+  account_balance_octas?: string;
+  account_balance_move?: string;
+  estimated_gas_price?: string;
+  function_exists?: boolean;
+  payload_valid?: boolean;
+}
+
 // Simulation result types
 export interface SimulationResult {
   success: boolean;
@@ -32,6 +41,10 @@ export interface SimulationResult {
   changes: StateChange[];
   events: TransactionEvent[];
   timestamp?: string;
+  // Validation info when auth fails
+  validation?: ValidationInfo;
+  simulation_note?: string;
+  error?: string;
 }
 
 // State change types

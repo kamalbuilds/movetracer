@@ -60,7 +60,7 @@ export function CodeEditor({
       allowComments: false,
       schemas: [
         {
-          uri: "movesim://payload",
+          uri: "movetracer://payload",
           fileMatch: ["*"],
           schema: {
             type: "object",

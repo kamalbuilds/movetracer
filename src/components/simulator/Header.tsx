@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { NETWORKS } from "@/lib/movement";
 import { SavedSimulation } from "@/types";
+import { NetworkStatus } from "./NetworkStatus";
 import {
   Github,
   Book,
@@ -17,6 +18,7 @@ import {
   Clock,
   CheckCircle,
   XCircle,
+  Compass,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -37,7 +39,7 @@ export function Header() {
                 M
               </div>
               <div>
-                <h1 className="text-xl font-bold tracking-tight">MoveSim</h1>
+                <h1 className="text-xl font-bold tracking-tight">MoveTracer</h1>
                 <p className="text-[10px] text-muted-foreground -mt-0.5">
                   Transaction Simulator
                 </p>
@@ -50,12 +52,13 @@ export function Header() {
                 network === "mainnet"
                   ? "border-green-500/30 text-green-400"
                   : network === "testnet"
-                  ? "border-primary/30 text-primary"
-                  : "border-blue-500/30 text-blue-400"
+                    ? "border-primary/30 text-primary"
+                    : "border-blue-500/30 text-blue-400"
               )}
             >
               {network}
             </Badge>
+            <NetworkStatus network={network} />
           </div>
 
           {/* Actions */}
@@ -77,6 +80,18 @@ export function Header() {
             </Tooltip>
 
             <div className="w-px h-6 bg-white/10" />
+
+            <Tooltip content="Explorer">
+              <a
+                href={`https://explorer.movementnetwork.xyz/?network=${network}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button variant="ghost" size="icon">
+                  <Compass className="w-4 h-4" />
+                </Button>
+              </a>
+            </Tooltip>
 
             <Tooltip content="Documentation">
               <a
