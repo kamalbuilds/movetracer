@@ -245,12 +245,11 @@ Future Roadmap
 3. Phase 4: Cloud persistence, team workspaces
 4. Phase 5: IDE integration (VS Code extension)
 
-
 ---
 
 Team
 
-Built with passion for the Movement Encode M1 Hackathon.
+kamal : built with passion for the Movement Encode M1 Hackathon.
 
 ---
 
